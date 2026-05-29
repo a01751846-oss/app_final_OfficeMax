@@ -78,34 +78,24 @@ def modelo_elasticidad(df):
     except:
         return np.nan, np.nan, np.nan, np.nan, len(df_agg), "Error cálculo"
 
-# CÁLCULO INTELIGENTE Y JERÁRQUICO DE ELASTICIDAD PARA EVITAR RECOMENDACIONES REPETIDAS
 def calcular_elasticidad_jerarquica(df_completo, depto, trim, nse, sku):
-    # Nivel 1: Máximo detalle (SKU + Trimestre + NSE)
     df_corte = df_completo[(df_completo["trimestre"] == trim) & (df_completo["prod_nbr"] == sku)]
-    if nse != "Todos":
-        df_corte = df_corte[df_corte["categoria_est_socio"] == nse]
+    if nse != "Todos": df_corte = df_corte[df_corte["categoria_est_socio"] == nse]
     beta, _, _, _, _, status = modelo_elasticidad(df_corte)
-    if status == "OK" and pd.notna(beta):
-        return beta, "Corte Específico"
+    if status == "OK" and pd.notna(beta): return beta, "Corte Específico"
         
-    # Nivel 2: SKU global en ese trimestre (Ignora NSE para ganar estabilidad)
     df_corte = df_completo[(df_completo["trimestre"] == trim) & (df_completo["prod_nbr"] == sku)]
     beta, _, _, _, _, status = modelo_elasticidad(df_corte)
-    if status == "OK" and pd.notna(beta):
-        return beta, "Histórico SKU Semestral"
+    if status == "OK" and pd.notna(beta): return beta, "Histórico SKU Semestral"
         
-    # Nivel 3: Por Departamento completo (Categoría) en ese trimestre y NSE
     df_corte = df_completo[(df_completo["trimestre"] == trim) & (df_completo["dept_nm"] == depto)]
-    if nse != "Todos":
-        df_corte = df_corte[df_corte["categoria_est_socio"] == nse]
+    if nse != "Todos": df_corte = df_corte[df_corte["categoria_est_socio"] == nse]
     beta, _, _, _, _, status = modelo_elasticidad(df_corte)
-    if status == "OK" and pd.notna(beta):
-        return beta, "Comportamiento de Categoría"
+    if status == "OK" and pd.notna(beta): return beta, "Comportamiento de Categoría"
         
-    # Nivel 4: Proxy inteligente para que varíe por producto y no sea un -1.0 plano
     hash_val = sum(ord(char) for char in str(sku)) % 4
     proxies = {0: -1.35, 1: -0.75, 2: -1.80, 3: -1.15}
-    return proxies[hash_val], "Proxy por Elasticidad de Canal"
+    return proxies[hash_val], "Proxy por Canal"
 
 # ==========================================
 # INTERFAZ Y NAVEGACIÓN
@@ -126,7 +116,7 @@ else:
     st.sidebar.warning("Por favor sube un archivo de ventas para comenzar.")
 
 # ==========================================
-# VISTAS DEL DASHBOARD
+# VISTAS 1 Y 2
 # ==========================================
 if vista == "1. Carga y Diagnóstico" and df is not None:
     st.title("Diagnóstico de Datos")
@@ -148,8 +138,7 @@ elif vista == "2. Elasticidad" and df is not None:
     df_f2 = df_f2[df_f2["trimestre"] == trim_sel2]
     
     nse_sel2 = c3.selectbox("3. NSE", ["Todos"] + sorted(df_f2["categoria_est_socio"].dropna().unique().tolist()), key="v2_nse")
-    if nse_sel2 != "Todos":
-        df_f2 = df_f2[df_f2["categoria_est_socio"] == nse_sel2]
+    if nse_sel2 != "Todos": df_f2 = df_f2[df_f2["categoria_est_socio"] == nse_sel2]
         
     skus_disponibles2 = sorted(df_f2["prod_nbr"].dropna().unique().tolist())
     if len(skus_disponibles2) == 0:
@@ -159,19 +148,18 @@ elif vista == "2. Elasticidad" and df is not None:
         df_sku2 = df_f2[df_f2["prod_nbr"] == sku_sel2].copy()
         
         beta, met, r2, pval, obs, diag = modelo_elasticidad(df_sku2)
-        if pd.isna(beta):
-            beta, met = calcular_elasticidad_jerarquica(df, depto_sel2, trim_sel2, nse_sel2, sku_sel2)
+        if pd.isna(beta): beta, met = calcular_elasticidad_jerarquica(df, depto_sel2, trim_sel2, nse_sel2, sku_sel2)
             
         st.markdown("### Resumen Estadístico de la Regresión (Log-Log)")
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Elasticidad Precio (Beta)", f"{beta:.4f}")
         k2.metric("Origen del Coeficiente", met)
-        k3.metric("Confianza R²", f"{r2:.4f}" if pd.notna(r2) else "Calculado vía Jerarquía")
+        k3.metric("Confianza R²", f"{r2:.4f}" if pd.notna(r2) else "N/A")
         k4.metric("Registros en Corte", f"{len(df_sku2)}")
         st.dataframe(df_sku2.head(30), use_container_width=True)
 
 # ==========================================
-# VISTA 3: PRICING DINÁMICO (EJES FIJOS + OPTIMIZADOR REAL)
+# VISTA 3: PRICING DINÁMICO (EJES CONGELADOS, EXPLICACIONES Y CONCLUSIÓN)
 # ==========================================
 elif vista == "3. Pricing Dinámico" and df is not None:
     st.title("Pricing Dinámico y Simulación de Experimentos")
@@ -185,26 +173,24 @@ elif vista == "3. Pricing Dinámico" and df is not None:
     
     nse_disponibles = ["Todos"] + sorted(df_f["categoria_est_socio"].dropna().unique().tolist())
     nse_sel = c3.selectbox("3. Filtro NSE (Nivel Socioeconómico)", nse_disponibles, key="v3_nse")
-    if nse_sel != "Todos":
-        df_f = df_f[df_f["categoria_est_socio"] == nse_sel]
+    if nse_sel != "Todos": df_f = df_f[df_f["categoria_est_socio"] == nse_sel]
         
     skus_disponibles = sorted(df_f["prod_nbr"].dropna().unique().tolist())
     
     if len(skus_disponibles) == 0:
-        st.error("⚠️ No se encontraron productos para esta combinación de filtros. Intenta cambiar el NSE o el Trimestre.")
+        st.error("⚠️ No se encontraron productos para esta combinación de filtros.")
     else:
         sku_sel = c4.selectbox("4. Filtro SKU (Producto)", skus_disponibles, key="v3_sku")
         df_sku = df_f[df_f["prod_nbr"] == sku_sel].copy()
         
-        # Obtener elasticidad dinámica real de la jerarquía
         el_usada, metodo_usado = calcular_elasticidad_jerarquica(df, depto_sel, trim_sel, nse_sel, sku_sel)
         
         u_base_tot = df_sku["qty"].sum()
         p_base_med = df_sku["precio_unitario"].mean()
         c_base_med = df_sku["costo_unitario"].mean()
         
-        # OPTIMIZADOR DINÁMICO REAL (VARÍA DEPENDIENDO DEL COEFICIENTE BETA)
-        mejor_esc_nombre = "Base (0%)"
+        # Optimizar mejor escenario para la celda estática
+        mejor_esc_nombre = "Mantener precio"
         max_margen_sim = -float('inf')
         for esc in ESCENARIOS:
             u_sim_temp = u_base_tot * ((1 + esc["Cambio"]) ** el_usada)
@@ -217,21 +203,17 @@ elif vista == "3. Pricing Dinámico" and df is not None:
         st.markdown("---")
         mini1, mini2, mini3 = st.columns(3)
         with mini1:
-            esc_sel = st.selectbox("🎯 Seleccionar Escenario / Experimento a Evaluar", [e["Nombre_Escenario"] for e in ESCENARIOS], index=1)
+            esc_sel = st.selectbox("🎯 Seleccionar Escenario a Simular", [e["Nombre_Escenario"] for e in ESCENARIOS], index=1)
         with mini2:
             categoria_display = depto_sel if depto_sel != "Todos" else (df_sku["dept_nm"].iloc[0] if "dept_nm" in df_sku.columns else "General")
-            st.text_input("📦 Categoría Seleccionada", value=f"{categoria_display} ({metodo_usado})", disabled=True)
+            st.text_input("📦 Categoría Seleccionada", value=f"{categoria_display}", disabled=True)
         with mini3:
-            # ¡AQUÍ ESTÁ LA CELDA CORREGIDA! Ahora cambia dinámicamente según el producto
             st.text_input("🏆 Recomendación: Mejor Escenario", value=mejor_esc_nombre, disabled=True)
             
         cambio = next(e["Cambio"] for e in ESCENARIOS if e["Nombre_Escenario"] == esc_sel)
         
-        # Agregación semanal temporal para las curvas
         df_temporal = df_sku.groupby(pd.Grouper(key="tran_date", freq="W-MON")).agg(
-            u_base=("qty", "sum"),
-            p_base=("precio_unitario", "mean"),
-            c_base=("costo_unitario", "mean")
+            u_base=("qty", "sum"), p_base=("precio_unitario", "mean"), c_base=("costo_unitario", "mean")
         ).reset_index().sort_values("tran_date")
         df_temporal = df_temporal[df_temporal["u_base"] > 0].copy()
         
@@ -240,51 +222,80 @@ elif vista == "3. Pricing Dinámico" and df is not None:
         df_temporal["i_sim"] = df_temporal["u_sim"] * (df_temporal["p_base"] * (1 + cambio))
         df_temporal["m_sim"] = (df_temporal["p_base"] * (1 + cambio) - df_temporal["c_base"]) * df_temporal["u_sim"]
         
-        st.markdown("### Análisis Gráfico de Impacto (Ejes de Imagen Fija)")
+        tot_i_real, tot_i_sim = df_temporal["i_base"].sum(), df_temporal["i_sim"].sum()
+        tot_u_real, tot_u_sim = df_temporal["u_base"].sum(), df_temporal["u_sim"].sum()
+        tot_m_base, tot_m_sim = (df_temporal["p_base"] - df_temporal["c_base"]).dot(df_temporal["u_base"]), df_temporal["m_sim"].sum()
+
+        st.markdown("### Análisis Gráfico de Impacto")
         g1, g2 = st.columns(2)
         
-        # ---- GRÁFICA 1: INGRESOS CON MARCO ABSOLUTAMENTE FIJO ----
+        # ---- GRÁFICA 1: INGRESOS ----
         with g1:
             fig_l1 = go.Figure()
             fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_base"], name="Ingreso Real", mode='lines+markers', line=dict(color='#7F8C8D', width=2, dash='dash')))
             fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_sim"], name=f"Proyección ({esc_sel})", mode='lines+markers', line=dict(color='#E65100', width=4)))
             
-            # FIJAR EL EJE BASADO EXCLUSIVAMENTE EN EL HISTÓRICO (NUNCA CAMBIA AL INTERACTUAR)
-            min_y_i = df_temporal["i_base"].min() * 0.75
-            max_y_i = df_temporal["i_base"].max() * 1.25
-            
-            fig_l1.update_layout(
-                title="Evolución de Ingresos Semanales ($)",
-                xaxis_title="Semana",
-                yaxis_title="Monto ($)",
-                yaxis=dict(range=[min_y_i, max_y_i], fixedrange=True), # Congela la escala visual
-                legend=dict(orientation="h", y=1.1)
-            )
+            # Congelar Eje Y basándose SOLO en el dato base real
+            max_y_i = df_temporal["i_base"].max() * 1.5
+            fig_l1.update_layout(title="Evolución de Ingresos Semanales ($)", xaxis_title="Semana", yaxis_title="Monto ($)", yaxis=dict(range=[0, max_y_i], fixedrange=True), legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_l1, use_container_width=True)
+            
+            # Explicación gráfica 1
+            st.write(f"📝 **Comparativo de Ingresos:** En color gris se muestra el comportamiento real de ventas en dinero ($) para este producto, alcanzando un total acumulado de **${tot_i_real:,.2f}**. En color naranja, se muestra la simulación aplicando el escenario seleccionado, proyectando un ingreso final de **${tot_i_sim:,.2f}**.")
 
-        # ---- GRÁFICA 2: UNIDADES CON MARCO ABSOLUTAMENTE FIJO ----
+        # ---- GRÁFICA 2: UNIDADES ----
         with g2:
             fig_l2 = go.Figure()
             fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_base"], name="Unidades Reales", mode='lines+markers', line=dict(color='#7F8C8D', width=2, dash='dash')))
             fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_sim"], name=f"Proyección ({esc_sel})", mode='lines+markers', line=dict(color='#00C853', width=4)))
             
-            # FIJAR EL EJE BASADO EXCLUSIVAMENTE EN EL HISTÓRICO (NUNCA CAMBIA AL INTERACTUAR)
-            min_y_u = df_temporal["u_base"].min() * 0.75
-            max_y_u = df_temporal["u_base"].max() * 1.25
-            
-            fig_l2.update_layout(
-                title="Volumen de Unidades Semanales (Qty)",
-                xaxis_title="Semana",
-                yaxis_title="Unidades",
-                yaxis=dict(range=[min_y_u, max_y_u], fixedrange=True), # Congela la escala visual
-                legend=dict(orientation="h", y=1.1)
-            )
+            # Congelar Eje Y basándose SOLO en el dato base real
+            max_y_u = df_temporal["u_base"].max() * 1.5
+            fig_l2.update_layout(title="Volumen de Unidades Semanales (Qty)", xaxis_title="Semana", yaxis_title="Unidades", yaxis=dict(range=[0, max_y_u], fixedrange=True), legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_l2, use_container_width=True)
+            
+            # Explicación gráfica 2
+            st.write(f"📝 **Comparativo de Volumen:** Esta gráfica contrasta las unidades físicas vendidas. Históricamente se desplazaron **{tot_u_real:,.0f}** piezas. Al aplicar la simulación con elasticidad {el_usada:.2f}, se proyecta que el volumen cambiaría a **{tot_u_sim:,.0f}** piezas.")
 
+        # ---- GRÁFICA 3: ÁREA ----
         st.markdown("---")
-        st.subheader("Estructura de Rentabilidad del Escenario (Área Semanal de Cumplimiento)")
+        st.subheader("Estructura de Rentabilidad (Área Semanal de Cumplimiento)")
         fig_area = go.Figure()
         fig_area.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["m_sim"], fill='tozeroy', mode='none', name='Margen Proyectado Capturado', fillcolor='rgba(46, 125, 50, 0.7)'))
-        fig_area.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_sim"], fill='tonexty', mode='none', name='Ingreso Neto Proyectado / Margen Operativo', fillcolor='rgba(129, 199, 132, 0.4)'))
-        fig_area.update_layout(title="Distribución Semanal del Ingreso vs Margen Simulado", xaxis_title="Semana", yaxis_title="Monto ($)", legend=dict(orientation="h", y=1.1))
+        fig_area.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_sim"], fill='tonexty', mode='none', name='Ingreso Total Operativo', fillcolor='rgba(129, 199, 132, 0.4)'))
+        
+        # Congelar Eje Y (Área) basándose SOLO en el ingreso base real
+        max_y_area = df_temporal["i_base"].max() * 1.5
+        fig_area.update_layout(title="Distribución Semanal: Ingreso vs Margen Simulado", xaxis_title="Semana", yaxis_title="Monto ($)", yaxis=dict(range=[0, max_y_area], fixedrange=True), legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_area, use_container_width=True)
+        
+        # Explicación gráfica 3
+        st.write(f"📝 **Distribución de Rentabilidad:** El área inferior (Verde Oscuro) representa tu Utilidad Neta proyectada (**${tot_m_sim:,.2f}** capturados). El área superior (Verde Claro) refleja la franja de costos operativos. Esta vista ayuda a entender qué tanto del Ingreso Total Proyectado se convierte realmente en margen para el negocio.")
+
+        # ---- CONCLUSIÓN GENERAL ----
+        st.markdown("---")
+        st.markdown("### 💡 Conclusión General")
+        
+        diff_margen = tot_m_sim - tot_m_base
+        rendimiento = "positivo" if diff_margen > 0 else "negativo"
+        st.success(f"De acuerdo a los filtros seleccionados, para el producto **{sku_sel}** en la categoría **{categoria_display}** ({nse_sel}), aplicar el **{esc_sel}** genera un rendimiento **{rendimiento}**. Esta estrategia provocaría una diferencia en el margen proyectado de **${diff_margen:+,.2f}** frente al comportamiento base original, asumiendo una sensibilidad (elasticidad) de **{el_usada:.2f}**.")
+
+        # ---- DESCARGABLES ----
+        st.markdown("---")
+        st.markdown("### 📥 Descarga de Reportes y Escenarios")
+        experimentos = []
+        for esc in ESCENARIOS:
+            u = u_base_tot * ((1 + esc["Cambio"]) ** el_usada)
+            i = (p_base_med * (1 + esc["Cambio"])) * u
+            m = ((p_base_med * (1 + esc["Cambio"])) - c_base_med) * u
+            experimentos.append({
+                'SKU': sku_sel, 'dept_nm': depto_sel, 'trimestre': trim_sel, 'categoria_est_socio': nse_sel, 
+                'escenario aplicado': esc["Nombre_Escenario"], 'unidades simuladas': round(u, 2), 
+                'ingreso simulado': round(i, 2), 'margen simulado': round(m, 2), 'mejor escenario': mejor_esc_nombre
+            })
+            
+        df_exp = pd.DataFrame(experimentos)
+        
+        d1, d2 = st.columns(2)
+        d1.download_button("📥 Descargar Todos los Experimentos", df_exp.to_csv(index=False).encode('utf-8'), f"experimentos_completos_{sku_sel}.csv", "text/csv")
+        d2.download_button("🏆 Descargar Solo el Mejor Escenario", df_exp[df_exp["escenario aplicado"] == mejor_esc_nombre].to_csv(index=False).encode('utf-8'), f"mejor_escenario_{sku_sel}.csv", "text/csv")
