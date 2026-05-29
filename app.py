@@ -128,12 +128,12 @@ elif vista == "2. Elasticidad" and df is not None:
         st.dataframe(df_sku.head(10))
 
 # ==========================================
-# VISTA 3: PRICING DINÁMICO (ACTUALIZADA)
+# VISTA 3: PRICING DINÁMICO (AGRUPACIÓN SEMANAL)
 # ==========================================
 elif vista == "3. Pricing Dinámico" and df is not None:
     st.title("Pricing Dinámico y Simulación")
     
-    # 1. Filtros principales superiores
+    # Filtros principales superiores
     c1, c2, c3, c4 = st.columns(4)
     depto_sel = c1.selectbox("Filtro Departamento", ["Todos"] + df["dept_nm"].dropna().unique().tolist() if "dept_nm" in df.columns else ["Todos"])
     df_f = df[df["dept_nm"] == depto_sel] if depto_sel != "Todos" else df
@@ -168,11 +168,11 @@ elif vista == "3. Pricing Dinámico" and df is not None:
                 mejor_esc_nombre = esc["Nombre_Escenario"]
 
         # ==========================================
-        # LAS 3 MINI CASILLAS ALINEADAS (REQUISITO)
+        # LAS 3 MINI CASILLAS ALINEADAS
         # ==========================================
         mini1, mini2, mini3 = st.columns(3)
         with mini1:
-            esc_sel = st.selectbox("🎯 Seleccionar Escenario / Experimento", [e["Nombre_Escenario"] for e in ESCENARIOS])
+            esc_sel = st.selectbox("🎯 Seleccionar Escenario", [e["Nombre_Escenario"] for e in ESCENARIOS])
         with mini2:
             categoria_display = depto_sel if depto_sel != "Todos" else (df_sku["dept_nm"].iloc[0] if "dept_nm" in df_sku.columns else "General")
             st.text_input("📦 Categoría del Producto", value=categoria_display, disabled=True)
@@ -181,80 +181,86 @@ elif vista == "3. Pricing Dinámico" and df is not None:
             
         cambio = next(e["Cambio"] for e in ESCENARIOS if e["Nombre_Escenario"] == esc_sel)
         
-        # Preparación de la serie temporal diaria para las gráficas de líneas
-        df_temporal = df_sku.groupby("tran_date").agg(
+        # ==========================================
+        # AGRUPACIÓN SEMANAL PARA LAS GRÁFICAS
+        # ==========================================
+        # Se agrupa por semana (W-MON) para evitar gráficos vacíos o puntos desconectados
+        df_temporal = df_sku.groupby(pd.Grouper(key="tran_date", freq="W-MON")).agg(
             u_base=("qty", "sum"),
             p_base=("precio_unitario", "mean"),
             c_base=("costo_unitario", "mean")
         ).reset_index().sort_values("tran_date")
         
+        # Filtrar semanas vacías donde no hubo ventas
+        df_temporal = df_temporal[df_temporal["u_base"] > 0].copy()
+        
+        # Cálculos semanales
         df_temporal["i_base"] = df_temporal["u_base"] * df_temporal["p_base"]
         df_temporal["u_sim"] = df_temporal["u_base"] * np.exp(el_usada * np.log1p(cambio))
         df_temporal["i_sim"] = df_temporal["u_sim"] * (df_temporal["p_base"] * (1 + cambio))
         df_temporal["m_sim"] = (df_temporal["p_base"] * (1 + cambio) - df_temporal["c_base"]) * df_temporal["u_sim"]
         
-        # Totales para los textos explicativos
+        # Totales para los textos
         tot_i_real = df_temporal["i_base"].sum()
         tot_i_sim = df_temporal["i_sim"].sum()
         tot_u_real = df_temporal["u_base"].sum()
         tot_u_sim = df_temporal["u_sim"].sum()
         tot_m_sim = df_temporal["m_sim"].sum()
 
-        st.markdown("### Análisis Gráfico e Impacto")
+        st.markdown("### Análisis Gráfico Semanal")
         g1, g2 = st.columns(2)
         
         # ---- GRÁFICA 1: LÍNEAS DE INGRESO ----
         with g1:
             fig_l1 = go.Figure()
-            fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_base"], name="Ingreso Real", mode='lines', line=dict(color='gray', width=2)))
-            fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_sim"], name="Ingreso Proyectado", mode='lines', line=dict(color='#1f77b4', width=3)))
-            fig_l1.update_layout(title="Evolución Temporal de Ingresos ($)", xaxis_title="Fecha", yaxis_title="Monto ($)", legend=dict(orientation="h", y=1.1))
+            fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_base"], name="Ingreso Real", mode='lines+markers', line=dict(color='gray', width=2)))
+            fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_sim"], name="Ingreso Proyectado", mode='lines+markers', line=dict(color='#1f77b4', width=3)))
+            fig_l1.update_layout(title="Ingresos Semanales ($)", xaxis_title="Semana", yaxis_title="Monto ($)", legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_l1, use_container_width=True)
             
-            st.write(f"📝 **Explicación:** Esta gráfica compara los **Ingresos Reales** históricos acumulados contra los **Ingresos Proyectados** bajo el escenario de *{esc_sel}*. Utilizando datos reales de la app, el ingreso histórico total de este periodo fue de **${tot_i_real:,.2f}**, mientras que el modelo estima un ingreso simulado de **${tot_i_sim:,.2f}**.")
+            st.write(f"📝 **Explicación:** Esta gráfica compara los **Ingresos Reales** históricos contra los **Ingresos Proyectados** bajo el escenario *{esc_sel}*. El ingreso histórico total fue de **${tot_i_real:,.2f}**, mientras que el modelo estima un ingreso de **${tot_i_sim:,.2f}**.")
 
         # ---- GRÁFICA 2: LÍNEAS DE UNIDADES ----
         with g2:
             fig_l2 = go.Figure()
-            fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_base"], name="Unidades Reales", mode='lines', line=dict(color='gray', width=2)))
-            fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_sim"], name="Unidades Proyectadas", mode='lines', line=dict(color='#9467bd', width=3)))
-            fig_l2.update_layout(title="Evolución Temporal de Unidades (Qty)", xaxis_title="Fecha", yaxis_title="Unidades", legend=dict(orientation="h", y=1.1))
+            fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_base"], name="Unidades Reales", mode='lines+markers', line=dict(color='gray', width=2)))
+            fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_sim"], name="Unidades Proyectadas", mode='lines+markers', line=dict(color='#9467bd', width=3)))
+            fig_l2.update_layout(title="Unidades Semanales (Qty)", xaxis_title="Semana", yaxis_title="Unidades", legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_l2, use_container_width=True)
             
-            st.write(f"📝 **Explicación:** Esta gráfica mide el volumen físico de ventas en el tiempo. Compara las **Unidades Reales** vendidas frente a las **Unidades Proyectadas** afectadas por la elasticidad calculada de **{el_usada:.2f}**. El volumen real total fue de **{tot_u_real:,.0f}** piezas y la simulación proyecta un total de **{tot_u_sim:,.0f}** piezas.")
+            st.write(f"📝 **Explicación:** Mide el volumen de ventas por semana. Compara las **Unidades Reales** frente a las **Unidades Proyectadas** considerando una elasticidad de **{el_usada:.2f}**. El volumen real fue de **{tot_u_real:,.0f}** piezas vs **{tot_u_sim:,.0f}** piezas proyectadas.")
 
         st.markdown("---")
         
         # ---- GRÁFICA 3: ÁREA INGRESO VS MARGEN SIMULADO ----
-        st.subheader("Estructura de Rentabilidad del Escenario (Área de Simulación)")
+        st.subheader("Estructura de Rentabilidad del Escenario (Área Semanal)")
         
-        # Construimos el gráfico de área utilizando la lógica de capas solicitada para reflejar el cumplimiento
         fig_area = go.Figure()
         
-        # Área de Margen capturado y alcanzado (Verde oscuro / Turquesa corporativo)
+        # Área de Margen (Turquesa oscuro / Verde oscuro)
         fig_area.add_trace(go.Scatter(
             x=df_temporal["tran_date"], y=df_temporal["m_sim"],
             fill='tozeroy', mode='none', name='Margen Proyectado Alcanzado',
-            fillcolor='rgba(0, 177, 178, 0.6)' # Color de la paleta inicial con transparencia
+            fillcolor='rgba(0, 177, 178, 0.6)' 
         ))
         
-        # Área de Ingreso Total Simulado (Verde claro / Sobrepasado o brecha de operación)
+        # Área de Ingreso Total (Verde claro)
         fig_area.add_trace(go.Scatter(
             x=df_temporal["tran_date"], y=df_temporal["i_sim"],
-            fill='tonexty', mode='none', name='Ingreso Neto / Margen Sobrepasado',
-            fillcolor='rgba(44, 160, 44, 0.3)' # Verde claro de la paleta con alta transparencia
+            fill='tonexty', mode='none', name='Ingreso Total / Brecha Operativa',
+            fillcolor='rgba(44, 160, 44, 0.3)' 
         ))
         
         fig_area.update_layout(
-            title="Distribución del Ingreso vs Margen Simulado en el Tiempo",
-            xaxis_title="Fecha", yaxis_title="Monto ($)",
+            title="Distribución del Ingreso vs Margen Simulado",
+            xaxis_title="Semana", yaxis_title="Monto ($)",
             legend=dict(orientation="h", y=1.1)
         )
         st.plotly_chart(fig_area, use_container_width=True)
         
-        st.write(f"ℹ️ **Interpretación del Gráfico de Área:** Esta visualización continua detalla la proporción del margen dentro del ingreso total simulado diario. El área inferior (**Turquesa**) representa la rentabilidad pura proyectada que se captura (**${tot_m_sim:,.2f}** totales), mientras que el área superior (**Verde Claro**) representa el ingreso que cubre costos operativos o supera las metas de margen con base en los datos de elasticidad aplicados al SKU **{sku_sel}**.")
+        st.write(f"ℹ️ **Interpretación:** El área inferior (**Turquesa**) representa la rentabilidad pura (margen) capturada por semana (**${tot_m_sim:,.2f}** totales), mientras que el área superior (**Verde Claro**) muestra el volumen total de ingresos proyectados. La diferencia entre ambas curvas representa el costo operativo o costo de mercancía.")
 
-        # Botones de descarga de reportes
+        # Botones de descarga
         st.markdown("---")
         experimentos = []
         for esc in ESCENARIOS:
