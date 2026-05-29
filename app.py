@@ -36,12 +36,12 @@ def limpiar_y_cruzar_bases(df_ventas, df_nse):
         if col in v.columns:
             v[col] = pd.to_numeric(v[col].astype(str).str.replace(r"[$,]", "", regex=True), errors="coerce")
         
+    # Limpieza estándar balanceada para no destruir volumen de datos de la base
     v = v.dropna(subset=["tran_date", "qty", "net_sale", "prod_nbr", "costo2"])
     v = v[(v["qty"] > 0) & (v["net_sale"] > 0)]
     
     v["precio_unitario"] = v["net_sale"] / v["qty"]
     v["costo_unitario"] = v["costo2"]
-    v = v[(v["precio_unitario"] > 0) & (v["costo_unitario"] >= 0)]
     
     if "categoria_est_socio" in v.columns:
         v["categoria_est_socio"] = v["categoria_est_socio"].astype(str).str.strip().str.title()
@@ -61,10 +61,10 @@ def limpiar_y_cruzar_bases(df_ventas, df_nse):
     return v, {"orig": filas_orig, "limpias": len(v), "semaforo": semaforo, "removidos": filas_orig - len(v)}
 
 def modelo_elasticidad(df):
-    if len(df) < 5:
+    if len(df) < 3:
         return np.nan, np.nan, np.nan, np.nan, len(df), "Insuficientes datos"
     df_agg = df.groupby("precio_unitario", as_index=False).agg(qty=("qty", "sum"))
-    if len(df_agg) < 3 or df_agg["precio_unitario"].nunique() < 2:
+    if len(df_agg) < 2 or df_agg["precio_unitario"].nunique() < 2:
         return np.nan, np.nan, np.nan, np.nan, len(df_agg), "Poca variabilidad"
         
     X = sm.add_constant(np.log(df_agg["precio_unitario"]))
@@ -73,7 +73,7 @@ def modelo_elasticidad(df):
         mod = sm.OLS(y, X).fit()
         beta = mod.params.iloc[1]
         if pd.isna(beta) or beta >= 0:
-            return np.nan, np.nan, np.nan, np.nan, len(df_agg), "Beta positivo o inválido"
+            return np.nan, np.nan, np.nan, np.nan, len(df_agg), "Beta inválido"
         return beta, mod.params.iloc[0], mod.rsquared, mod.pvalues.iloc[1], len(df_agg), "OK"
     except:
         return np.nan, np.nan, np.nan, np.nan, len(df_agg), "Error cálculo"
@@ -116,7 +116,7 @@ else:
     st.sidebar.warning("Por favor sube un archivo de ventas para comenzar.")
 
 # ==========================================
-# VISTAS 1 Y 2
+# VISTA 1 Y VISTA 2
 # ==========================================
 if vista == "1. Carga y Diagnóstico" and df is not None:
     st.title("Diagnóstico de Datos")
@@ -159,7 +159,7 @@ elif vista == "2. Elasticidad" and df is not None:
         st.dataframe(df_sku2.head(30), use_container_width=True)
 
 # ==========================================
-# VISTA 3: PRICING DINÁMICO (EJES CONGELADOS, EXPLICACIONES Y CONCLUSIÓN)
+# VISTA 3: PRICING DINÁMICO (EVALUACIÓN)
 # ==========================================
 elif vista == "3. Pricing Dinámico" and df is not None:
     st.title("Pricing Dinámico y Simulación de Experimentos")
@@ -172,7 +172,7 @@ elif vista == "3. Pricing Dinámico" and df is not None:
     df_f = df_f[df_f["trimestre"] == trim_sel]
     
     nse_disponibles = ["Todos"] + sorted(df_f["categoria_est_socio"].dropna().unique().tolist())
-    nse_sel = c3.selectbox("3. Filtro NSE (Nivel Socioeconómico)", nse_disponibles, key="v3_nse")
+    nse_sel = c3.selectbox("3. Filtro NSE", nse_disponibles, key="v3_nse")
     if nse_sel != "Todos": df_f = df_f[df_f["categoria_est_socio"] == nse_sel]
         
     skus_disponibles = sorted(df_f["prod_nbr"].dropna().unique().tolist())
@@ -189,7 +189,6 @@ elif vista == "3. Pricing Dinámico" and df is not None:
         p_base_med = df_sku["precio_unitario"].mean()
         c_base_med = df_sku["costo_unitario"].mean()
         
-        # Optimizar mejor escenario para la celda estática
         mejor_esc_nombre = "Mantener precio"
         max_margen_sim = -float('inf')
         for esc in ESCENARIOS:
@@ -229,56 +228,52 @@ elif vista == "3. Pricing Dinámico" and df is not None:
         st.markdown("### Análisis Gráfico de Impacto")
         g1, g2 = st.columns(2)
         
+        # LÍMITES FIJOS BASADOS EN HISTÓRICO REAL
+        max_y_i = df_temporal["i_base"].max() * 1.5
+        max_y_u = df_temporal["u_base"].max() * 1.5
+        
         # ---- GRÁFICA 1: INGRESOS ----
         with g1:
             fig_l1 = go.Figure()
             fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_base"], name="Ingreso Real", mode='lines+markers', line=dict(color='#7F8C8D', width=2, dash='dash')))
             fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_sim"], name=f"Proyección ({esc_sel})", mode='lines+markers', line=dict(color='#E65100', width=4)))
-            
-            # Congelar Eje Y basándose SOLO en el dato base real
-            max_y_i = df_temporal["i_base"].max() * 1.5
             fig_l1.update_layout(title="Evolución de Ingresos Semanales ($)", xaxis_title="Semana", yaxis_title="Monto ($)", yaxis=dict(range=[0, max_y_i], fixedrange=True), legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_l1, use_container_width=True)
             
-            # Explicación gráfica 1
-            st.write(f"📝 **Comparativo de Ingresos:** En color gris se muestra el comportamiento real de ventas en dinero ($) para este producto, alcanzando un total acumulado de **${tot_i_real:,.2f}**. En color naranja, se muestra la simulación aplicando el escenario seleccionado, proyectando un ingreso final de **${tot_i_sim:,.2f}**.")
+            # EXPLICACIÓN CON FORMATO CORREGIDO
+            st.info(f"Comparativo de Ingresos: En color gris se muestra el comportamiento real de ventas en dinero para este producto, alcanzando un total acumulado de ${tot_i_real:,.2f}. En color naranja, se muestra la simulación aplicando el escenario seleccionado, proyectando un ingreso final de ${tot_i_sim:,.2f}.")
 
         # ---- GRÁFICA 2: UNIDADES ----
         with g2:
             fig_l2 = go.Figure()
             fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_base"], name="Unidades Reales", mode='lines+markers', line=dict(color='#7F8C8D', width=2, dash='dash')))
             fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_sim"], name=f"Proyección ({esc_sel})", mode='lines+markers', line=dict(color='#00C853', width=4)))
-            
-            # Congelar Eje Y basándose SOLO en el dato base real
-            max_y_u = df_temporal["u_base"].max() * 1.5
             fig_l2.update_layout(title="Volumen de Unidades Semanales (Qty)", xaxis_title="Semana", yaxis_title="Unidades", yaxis=dict(range=[0, max_y_u], fixedrange=True), legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_l2, use_container_width=True)
             
-            # Explicación gráfica 2
-            st.write(f"📝 **Comparativo de Volumen:** Esta gráfica contrasta las unidades físicas vendidas. Históricamente se desplazaron **{tot_u_real:,.0f}** piezas. Al aplicar la simulación con elasticidad {el_usada:.2f}, se proyecta que el volumen cambiaría a **{tot_u_sim:,.0f}** piezas.")
+            # EXPLICACIÓN CON FORMATO CORREGIDO
+            st.info(f"Comparativo de Volumen: Esta gráfica contrasta las unidades físicas vendidas. Históricamente se desplazaron {tot_u_real:,.0f} piezas. Al aplicar la simulación con la sensibilidad calculada, se proyecta que el volumen cambiaría a {tot_u_sim:,.0f} piezas.")
 
-        # ---- GRÁFICA 3: ÁREA ----
+        # ---- GRÁFICA 3: NUEVA COMPARATIVA DIRECTA (INGRESO REAL VS MARGEN PROYECTADO) ----
         st.markdown("---")
-        st.subheader("Estructura de Rentabilidad (Área Semanal de Cumplimiento)")
-        fig_area = go.Figure()
-        fig_area.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["m_sim"], fill='tozeroy', mode='none', name='Margen Proyectado Capturado', fillcolor='rgba(46, 125, 50, 0.7)'))
-        fig_area.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_sim"], fill='tonexty', mode='none', name='Ingreso Total Operativo', fillcolor='rgba(129, 199, 132, 0.4)'))
+        st.subheader("Análisis de Conversión a Margen (Imagen Totalmente Fija)")
         
-        # Congelar Eje Y (Área) basándose SOLO en el ingreso base real
-        max_y_area = df_temporal["i_base"].max() * 1.5
-        fig_area.update_layout(title="Distribución Semanal: Ingreso vs Margen Simulado", xaxis_title="Semana", yaxis_title="Monto ($)", yaxis=dict(range=[0, max_y_area], fixedrange=True), legend=dict(orientation="h", y=1.1))
-        st.plotly_chart(fig_area, use_container_width=True)
+        fig_l3 = go.Figure()
+        fig_l3.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_base"], name="Ingreso Real (Línea Base)", mode='lines+markers', line=dict(color='#7F8C8D', width=2, dash='dash')))
+        fig_l3.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["m_sim"], name="Margen Proyectado Neto", mode='lines+markers', line=dict(color='#2E7D32', width=4)))
         
-        # Explicación gráfica 3
-        st.write(f"📝 **Distribución de Rentabilidad:** El área inferior (Verde Oscuro) representa tu Utilidad Neta proyectada (**${tot_m_sim:,.2f}** capturados). El área superior (Verde Claro) refleja la franja de costos operativos. Esta vista ayuda a entender qué tanto del Ingreso Total Proyectado se convierte realmente en margen para el negocio.")
+        fig_l3.update_layout(title="Comparativa: Cuánto Dinero Entró Originalmente vs Cuánto Margen Neto Te Quedará", xaxis_title="Semana", yaxis_title="Monto ($)", yaxis=dict(range=[0, max_y_i], fixedrange=True), legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig_l3, use_container_width=True)
+        
+        # EXPLICACIÓN CON FORMATO CORREGIDO
+        st.info(f"Análisis de Conversión a Margen: Esta vista contrasta de forma lineal el Ingreso Histórico Real en gris frente a la Utilidad Neta Proyectada en color verde (acumulando ${tot_m_sim:,.2f}). Permite ver de forma clara e inamovible qué porcentaje del dinero de venta se convierte efectivamente en rentabilidad pura semana a semana bajo este experimento.")
 
         # ---- CONCLUSIÓN GENERAL ----
         st.markdown("---")
         st.markdown("### 💡 Conclusión General")
-        
         diff_margen = tot_m_sim - tot_m_base
         rendimiento = "positivo" if diff_margen > 0 else "negativo"
-        st.success(f"De acuerdo a los filtros seleccionados, para el producto **{sku_sel}** en la categoría **{categoria_display}** ({nse_sel}), aplicar el **{esc_sel}** genera un rendimiento **{rendimiento}**. Esta estrategia provocaría una diferencia en el margen proyectado de **${diff_margen:+,.2f}** frente al comportamiento base original, asumiendo una sensibilidad (elasticidad) de **{el_usada:.2f}**.")
+        st.success(f"De acuerdo a los filtros seleccionados, para el producto {sku_sel} en la categoría {categoria_display} ({nse_sel}), aplicar el {esc_sel} genera un rendimiento {rendimiento}. Esta estrategia provocaría una diferencia en el margen proyectado de ${diff_margen:+,.2f} frente al comportamiento base original, asumiendo una sensibilidad de {el_usada:.2f}.")
 
         # ---- DESCARGABLES ----
         st.markdown("---")
