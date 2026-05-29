@@ -4,8 +4,6 @@ import numpy as np
 import statsmodels.api as sm
 import plotly.express as px
 import plotly.graph_objects as go
-import re
-import unicodedata
 
 # ==========================================
 # CONFIGURACIÓN
@@ -35,7 +33,6 @@ def limpiar_y_cruzar_bases(df_ventas, df_nse):
     v.columns = v.columns.str.strip()
     filas_orig = len(v)
     
-    # Limpieza Básica
     v["tran_date"] = pd.to_datetime(v["tran_date"], errors="coerce")
     for col in ["qty", "net_sale", "costo2"]:
         v[col] = pd.to_numeric(v[col].astype(str).str.replace(r"[$,]", "", regex=True), errors="coerce")
@@ -47,7 +44,6 @@ def limpiar_y_cruzar_bases(df_ventas, df_nse):
     v["costo_unitario"] = v["costo2"]
     v = v[(v["precio_unitario"] > 0) & (v["costo_unitario"] >= 0)]
     
-    # Cruce NSE 
     if df_nse is not None and "id_municipio" in v.columns and "ubica_geo" in df_nse.columns:
         v["id_municipio"] = v["id_municipio"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
         df_nse["ubica_geo"] = df_nse["ubica_geo"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
@@ -64,7 +60,6 @@ def limpiar_y_cruzar_bases(df_ventas, df_nse):
     return v, {"orig": filas_orig, "limpias": len(v), "semaforo": semaforo, "removidos": filas_orig - len(v)}
 
 def modelo_elasticidad(df):
-    """Regresión Log-Log usando Statsmodels."""
     df_agg = df.groupby("precio_unitario", as_index=False).agg(qty=("qty", "sum"))
     if len(df_agg) < 3 or df_agg["precio_unitario"].nunique() < 2:
         return np.nan, np.nan, np.nan, np.nan, len(df_agg), "No evaluable"
@@ -85,8 +80,8 @@ st.sidebar.title("Navegación")
 vista = st.sidebar.radio("Vistas", ["1. Carga y Diagnóstico", "2. Elasticidad", "3. Pricing Dinámico"])
 
 st.sidebar.markdown("---")
-ventas_file = st.sidebar.file_uploader("1. Ventas (Obligatorio) ℹ️", type=['csv', 'xlsx'], help="Base con tran_date, qty, net_sale, prod_nbr.")
-nse_file = st.sidebar.file_uploader("2. Nivel Socioeconómico (Opcional) ℹ️", type=['csv', 'xlsx'], help="Base de hogares INEGI.")
+ventas_file = st.sidebar.file_uploader("1. Ventas (Obligatorio) ℹ️", type=['csv', 'xlsx'])
+nse_file = st.sidebar.file_uploader("2. Nivel Socioeconómico (Opcional) ℹ️", type=['csv', 'xlsx'])
 
 if ventas_file:
     df_raw = pd.read_csv(ventas_file) if ventas_file.name.endswith('.csv') else pd.read_excel(ventas_file)
@@ -102,13 +97,11 @@ else:
 if vista == "1. Carga y Diagnóstico" and df is not None:
     st.title("Diagnóstico de Datos")
     st.subheader(f"Calidad: {stats['semaforo']}")
-    
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Registros Iniciales", stats["orig"])
     c2.metric("Registros Eliminados", stats["removidos"])
     c3.metric("Registros Limpios", stats["limpias"])
     c4.metric("SKUs Únicos", df["prod_nbr"].nunique())
-    
     st.dataframe(df.head(50), use_container_width=True)
 
 # ==========================================
@@ -116,16 +109,12 @@ if vista == "1. Carga y Diagnóstico" and df is not None:
 # ==========================================
 elif vista == "2. Elasticidad" and df is not None:
     st.title("Modelo de Elasticidad (Log-Log)")
-    st.info("ℹ️ Explora la sensibilidad de la demanda ante cambios en el precio.")
-    
     c1, c2, c3 = st.columns(3)
     deptos = df["dept_nm"].dropna().unique().tolist() if "dept_nm" in df.columns else ["N/A"]
-    depto_sel = c1.selectbox("Departamento ℹ️", ["Todos"] + deptos, help="Filtra categoría principal.")
-    
+    depto_sel = c1.selectbox("Departamento", ["Todos"] + deptos)
     df_f = df[df["dept_nm"] == depto_sel] if depto_sel != "Todos" else df
     trimestres = df_f["trimestre"].dropna().unique().tolist()
     trim_sel = c2.selectbox("Trimestre", ["Todos"] + trimestres)
-    
     df_f2 = df_f[df_f["trimestre"] == trim_sel] if trim_sel != "Todos" else df_f
     skus = df_f2["prod_nbr"].dropna().unique().tolist()
     sku_sel = c3.selectbox("SKU", skus)
@@ -133,125 +122,152 @@ elif vista == "2. Elasticidad" and df is not None:
     if sku_sel:
         df_sku = df_f2[df_f2["prod_nbr"] == sku_sel]
         beta, alfa, r2, pval, obs, diag = modelo_elasticidad(df_sku)
-        
-        st.markdown("---")
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Elasticidad (Beta)", f"{beta:.3f}" if pd.notna(beta) else "N/A", "Elástica" if beta < -1 else "Inelástica")
+        k1.metric("Elasticidad (Beta)", f"{beta:.3f}" if pd.notna(beta) else "N/A")
         k2.metric("R² del Modelo", f"{r2:.2f}" if pd.notna(r2) else "N/A")
-        k3.metric("Observaciones", obs)
-        k4.metric("Diagnóstico", diag)
-        
-        g1, g2, g3 = st.columns(3)
-        with g1:
-            fig1 = px.scatter(df_sku, x="qty", y="precio_unitario", trendline="ols", title="Curva de Elasticidad", color_discrete_sequence=[COLOR_PALETTE[0]])
-            st.plotly_chart(fig1, use_container_width=True)
-            st.caption("Relación Precio vs Cantidad (OLS)")
-        with g2:
-            fig2 = px.line(df_sku.groupby("tran_date")["qty"].sum().reset_index(), x="tran_date", y="qty", title="Demanda Histórica", color_discrete_sequence=[COLOR_PALETTE[1]])
-            st.plotly_chart(fig2, use_container_width=True)
-            st.caption("Unidades vendidas a través del tiempo.")
-        with g3:
-            if "estado" in df_sku.columns:
-                fig3 = px.bar(df_sku.groupby("estado")["qty"].sum().reset_index(), x="estado", y="qty", title="Demanda por Estado", color_discrete_sequence=[COLOR_PALETTE[2]])
-                st.plotly_chart(fig3, use_container_width=True)
-                st.caption("Concentración geográfica del SKU.")
-                
-        # Descarga CSV Vista 2
-        df_desc = pd.DataFrame([{
-            'SKU': sku_sel, 'dept_nm': depto_sel, 'subdept_nm': df_sku['subdept_nm'].iloc[0] if 'subdept_nm' in df_sku else '',
-            'marca': df_sku['marca'].iloc[0] if 'marca' in df_sku else '', 'tipo_marca': df_sku['tipo_marca'].iloc[0] if 'tipo_marca' in df_sku else '',
-            'categoria_est_socio': df_sku['categoria_est_socio'].iloc[0], 'trimestre': trim_sel,
-            'beta': beta, 'elasticidad': beta, 'alfa': alfa, 'r2': r2, 'p-value': pval, 'observaciones': obs, 'diagnostico': diag
-        }])
-        st.download_button("📥 Descargar Tabla de Elasticidad", df_desc.to_csv(index=False).encode('utf-8'), "elasticidad.csv", "text/csv")
+        st.dataframe(df_sku.head(10))
 
 # ==========================================
-# VISTA 3: PRICING DINÁMICO
+# VISTA 3: PRICING DINÁMICO (ACTUALIZADA)
 # ==========================================
 elif vista == "3. Pricing Dinámico" and df is not None:
     st.title("Pricing Dinámico y Simulación")
     
-    # Filtros
+    # 1. Filtros principales superiores
     c1, c2, c3, c4 = st.columns(4)
-    depto_sel = c1.selectbox("Departamento", ["Todos"] + df["dept_nm"].dropna().unique().tolist() if "dept_nm" in df.columns else ["Todos"])
+    depto_sel = c1.selectbox("Filtro Departamento", ["Todos"] + df["dept_nm"].dropna().unique().tolist() if "dept_nm" in df.columns else ["Todos"])
     df_f = df[df["dept_nm"] == depto_sel] if depto_sel != "Todos" else df
-    trim_sel = c2.selectbox("Trimestre", df_f["trimestre"].dropna().unique().tolist())
-    nse_sel = c3.selectbox("NSE", ["Todos"] + df_f["categoria_est_socio"].dropna().unique().tolist())
+    trim_sel = c2.selectbox("Filtro Trimestre", df_f["trimestre"].dropna().unique().tolist())
+    nse_sel = c3.selectbox("Filtro NSE", ["Todos"] + df_f["categoria_est_socio"].dropna().unique().tolist())
     
     df_f = df_f[df_f["trimestre"] == trim_sel]
     if nse_sel != "Todos": df_f = df_f[df_f["categoria_est_socio"] == nse_sel]
     
-    sku_sel = c4.selectbox("SKU (Unidad)", df_f["prod_nbr"].dropna().unique().tolist())
+    sku_sel = c4.selectbox("Filtro SKU (Unidad)", df_f["prod_nbr"].dropna().unique().tolist())
     
     st.markdown("---")
     if sku_sel:
-        df_sku = df_f[df_f["prod_nbr"] == sku_sel]
+        df_sku = df_f[df_f["prod_nbr"] == sku_sel].copy()
         beta, _, _, _, _, _ = modelo_elasticidad(df_sku)
-        el_usada = np.clip(beta, -5, 0) if pd.notna(beta) and beta < 0 else -1.0 # Fallback 
+        el_usada = np.clip(beta, -5, 0) if pd.notna(beta) and beta < 0 else -1.0
         
-        # Categorización Lógica
-        cat_sku = "Subir precio" if el_usada > -0.5 else ("Bajar precio" if el_usada < -1.5 else "Mantener precio")
+        # Pre-cálculo para optimización del mejor escenario
+        u_base_tot = df_sku["qty"].sum()
+        p_base_med = df_sku["precio_unitario"].mean()
+        c_base_med = df_sku["costo_unitario"].mean()
         
-        e1, e2, e3 = st.columns(3)
-        esc_sel = e1.selectbox("Escenario", [e["Nombre_Escenario"] for e in ESCENARIOS])
-        e2.info(f"**Categoría del SKU:** {cat_sku}")
+        mejor_esc_nombre = "Mantener precio"
+        max_margen_sim = -float('inf')
         
+        for esc in ESCENARIOS:
+            u_sim_temp = u_base_tot * np.exp(el_usada * np.log1p(esc["Cambio"]))
+            p_sim_temp = p_base_med * (1 + esc["Cambio"])
+            m_sim_temp = (p_sim_temp - c_base_med) * u_sim_temp
+            if m_sim_temp > max_margen_sim:
+                max_margen_sim = m_sim_temp
+                mejor_esc_nombre = esc["Nombre_Escenario"]
+
+        # ==========================================
+        # LAS 3 MINI CASILLAS ALINEADAS (REQUISITO)
+        # ==========================================
+        mini1, mini2, mini3 = st.columns(3)
+        with mini1:
+            esc_sel = st.selectbox("🎯 Seleccionar Escenario / Experimento", [e["Nombre_Escenario"] for e in ESCENARIOS])
+        with mini2:
+            categoria_display = depto_sel if depto_sel != "Todos" else (df_sku["dept_nm"].iloc[0] if "dept_nm" in df_sku.columns else "General")
+            st.text_input("📦 Categoría del Producto", value=categoria_display, disabled=True)
+        with mini3:
+            st.text_input("🏆 Mejor Escenario (Qué hacer)", value=mejor_esc_nombre, disabled=True)
+            
         cambio = next(e["Cambio"] for e in ESCENARIOS if e["Nombre_Escenario"] == esc_sel)
         
-        # Ecuación de simulación (Del Notebook Original)
-        u_base = df_sku["qty"].sum()
-        p_base = df_sku["precio_unitario"].mean()
-        c_base = df_sku["costo_unitario"].mean()
+        # Preparación de la serie temporal diaria para las gráficas de líneas
+        df_temporal = df_sku.groupby("tran_date").agg(
+            u_base=("qty", "sum"),
+            p_base=("precio_unitario", "mean"),
+            c_base=("costo_unitario", "mean")
+        ).reset_index().sort_values("tran_date")
         
-        i_base = u_base * p_base
-        m_base = (p_base - c_base) * u_base
+        df_temporal["i_base"] = df_temporal["u_base"] * df_temporal["p_base"]
+        df_temporal["u_sim"] = df_temporal["u_base"] * np.exp(el_usada * np.log1p(cambio))
+        df_temporal["i_sim"] = df_temporal["u_sim"] * (df_temporal["p_base"] * (1 + cambio))
+        df_temporal["m_sim"] = (df_temporal["p_base"] * (1 + cambio) - df_temporal["c_base"]) * df_temporal["u_sim"]
         
-        p_nuevo = p_base * (1 + cambio)
-        u_sim = u_base * np.exp(el_usada * np.log1p(cambio))
-        i_sim = p_nuevo * u_sim
-        m_sim = (p_nuevo - c_base) * u_sim
-        
-        st.subheader("Impacto Financiero")
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Unidades", f"{u_sim:,.0f}", f"{u_sim - u_base:,.0f} vs Base")
-        k2.metric("Ingreso", f"${i_sim:,.2f}", f"${i_sim - i_base:,.2f} vs Base")
-        k3.metric("Margen", f"${m_sim:,.2f}", f"${m_sim - m_base:,.2f} vs Base")
-        
-        # Gráficas
-        g1, g2, g3 = st.columns(3)
-        with g1:
-            st.plotly_chart(go.Figure(data=[go.Scatter(y=[i_base, i_base], name="Base"), go.Scatter(y=[i_base, i_sim], name="Simulado")]), use_container_width=True)
-            st.caption("Proyección de Ventas ($).")
-        with g2:
-            st.plotly_chart(go.Figure(data=[go.Scatter(y=[u_base, u_base], name="Base"), go.Scatter(y=[u_base, u_sim], name="Simulado")]), use_container_width=True)
-            st.caption("Proyección de Unidades.")
-        with g3:
-            st.plotly_chart(go.Figure(data=[go.Bar(x=["Ingreso", "Margen"], y=[i_sim, m_sim], marker_color=[COLOR_PALETTE[0], COLOR_PALETTE[3]])]), use_container_width=True)
-            st.caption("Ingreso vs Margen Simulado.")
+        # Totales para los textos explicativos
+        tot_i_real = df_temporal["i_base"].sum()
+        tot_i_sim = df_temporal["i_sim"].sum()
+        tot_u_real = df_temporal["u_base"].sum()
+        tot_u_sim = df_temporal["u_sim"].sum()
+        tot_m_sim = df_temporal["m_sim"].sum()
 
-        # Conclusión
-        st.success(f"💡 Para el SKU {sku_sel}, aplicar el escenario **{esc_sel}** modifica el margen en **${m_sim - m_base:,.2f}**, asumiendo una sensibilidad (elasticidad) de {el_usada:.2f}.")
+        st.markdown("### Análisis Gráfico e Impacto")
+        g1, g2 = st.columns(2)
         
-        # Descargas
+        # ---- GRÁFICA 1: LÍNEAS DE INGRESO ----
+        with g1:
+            fig_l1 = go.Figure()
+            fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_base"], name="Ingreso Real", mode='lines', line=dict(color='gray', width=2)))
+            fig_l1.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["i_sim"], name="Ingreso Proyectado", mode='lines', line=dict(color='#1f77b4', width=3)))
+            fig_l1.update_layout(title="Evolución Temporal de Ingresos ($)", xaxis_title="Fecha", yaxis_title="Monto ($)", legend=dict(orientation="h", y=1.1))
+            st.plotly_chart(fig_l1, use_container_width=True)
+            
+            st.write(f"📝 **Explicación:** Esta gráfica compara los **Ingresos Reales** históricos acumulados contra los **Ingresos Proyectados** bajo el escenario de *{esc_sel}*. Utilizando datos reales de la app, el ingreso histórico total de este periodo fue de **${tot_i_real:,.2f}**, mientras que el modelo estima un ingreso simulado de **${tot_i_sim:,.2f}**.")
+
+        # ---- GRÁFICA 2: LÍNEAS DE UNIDADES ----
+        with g2:
+            fig_l2 = go.Figure()
+            fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_base"], name="Unidades Reales", mode='lines', line=dict(color='gray', width=2)))
+            fig_l2.add_trace(go.Scatter(x=df_temporal["tran_date"], y=df_temporal["u_sim"], name="Unidades Proyectadas", mode='lines', line=dict(color='#9467bd', width=3)))
+            fig_l2.update_layout(title="Evolución Temporal de Unidades (Qty)", xaxis_title="Fecha", yaxis_title="Unidades", legend=dict(orientation="h", y=1.1))
+            st.plotly_chart(fig_l2, use_container_width=True)
+            
+            st.write(f"📝 **Explicación:** Esta gráfica mide el volumen físico de ventas en el tiempo. Compara las **Unidades Reales** vendidas frente a las **Unidades Proyectadas** afectadas por la elasticidad calculada de **{el_usada:.2f}**. El volumen real total fue de **{tot_u_real:,.0f}** piezas y la simulación proyecta un total de **{tot_u_sim:,.0f}** piezas.")
+
+        st.markdown("---")
+        
+        # ---- GRÁFICA 3: ÁREA INGRESO VS MARGEN SIMULADO ----
+        st.subheader("Estructura de Rentabilidad del Escenario (Área de Simulación)")
+        
+        # Construimos el gráfico de área utilizando la lógica de capas solicitada para reflejar el cumplimiento
+        fig_area = go.Figure()
+        
+        # Área de Margen capturado y alcanzado (Verde oscuro / Turquesa corporativo)
+        fig_area.add_trace(go.Scatter(
+            x=df_temporal["tran_date"], y=df_temporal["m_sim"],
+            fill='tozeroy', mode='none', name='Margen Proyectado Alcanzado',
+            fillcolor='rgba(0, 177, 178, 0.6)' # Color de la paleta inicial con transparencia
+        ))
+        
+        # Área de Ingreso Total Simulado (Verde claro / Sobrepasado o brecha de operación)
+        fig_area.add_trace(go.Scatter(
+            x=df_temporal["tran_date"], y=df_temporal["i_sim"],
+            fill='tonexty', mode='none', name='Ingreso Neto / Margen Sobrepasado',
+            fillcolor='rgba(44, 160, 44, 0.3)' # Verde claro de la paleta con alta transparencia
+        ))
+        
+        fig_area.update_layout(
+            title="Distribución del Ingreso vs Margen Simulado en el Tiempo",
+            xaxis_title="Fecha", yaxis_title="Monto ($)",
+            legend=dict(orientation="h", y=1.1)
+        )
+        st.plotly_chart(fig_area, use_container_width=True)
+        
+        st.write(f"ℹ️ **Interpretación del Gráfico de Área:** Esta visualización continua detalla la proporción del margen dentro del ingreso total simulado diario. El área inferior (**Turquesa**) representa la rentabilidad pura proyectada que se captura (**${tot_m_sim:,.2f}** totales), mientras que el área superior (**Verde Claro**) representa el ingreso que cubre costos operativos o supera las metas de margen con base en los datos de elasticidad aplicados al SKU **{sku_sel}**.")
+
+        # Botones de descarga de reportes
         st.markdown("---")
         experimentos = []
-        mejor_esc, max_margen = None, -float('inf')
         for esc in ESCENARIOS:
-            u = u_base * np.exp(el_usada * np.log1p(esc["Cambio"]))
-            i = (p_base * (1 + esc["Cambio"])) * u
-            m = ((p_base * (1 + esc["Cambio"])) - c_base) * u
-            if m > max_margen:
-                max_margen = m
-                mejor_esc = esc["Nombre_Escenario"]
-                
+            u = u_base_tot * np.exp(el_usada * np.log1p(esc["Cambio"]))
+            i = (p_base_med * (1 + esc["Cambio"])) * u
+            m = ((p_base_med * (1 + esc["Cambio"])) - c_base_med) * u
             experimentos.append({
-                'SKU': sku_sel, 'dept_nm': depto_sel, 'trimestre': trim_sel, 'escenario aplicado': esc["Nombre_Escenario"],
+                'SKU': sku_sel, 'dept_nm': categoria_display, 'trimestre': trim_sel, 'escenario aplicado': esc["Nombre_Escenario"],
                 'unidades simuladas': u, 'ingreso simulado': i, 'margen simulado': m
             })
-            
         df_exp = pd.DataFrame(experimentos)
-        df_exp['mejor escenario'] = mejor_esc
+        df_exp['mejor escenario'] = mejor_esc_nombre
         
         d1, d2 = st.columns(2)
         d1.download_button("📥 Descargar Todos los Experimentos", df_exp.to_csv(index=False).encode('utf-8'), "todos_experimentos.csv", "text/csv")
-        d2.download_button("🏆 Descargar Solo el Mejor Escenario", df_exp[df_exp["escenario aplicado"] == mejor_esc].to_csv(index=False).encode('utf-8'), "mejor_escenario.csv", "text/csv")
+        d2.download_button("🏆 Descargar Solo el Mejor Escenario", df_exp[df_exp["escenario aplicado"] == mejor_esc_nombre].to_csv(index=False).encode('utf-8'), "mejor_escenario.csv", "text/csv")
